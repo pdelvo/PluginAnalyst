@@ -22,6 +22,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.TreeMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.zip.ZipEntry;
@@ -94,7 +95,7 @@ public class PluginAnalyst {
         }
 
 
-        tally = MapSorter.valueSortedMap(tally);
+        tally = IntegerComparator.sort(tally);
 
         try (PrintWriter fr = new PrintWriter("methods.log")) {
             for (Map.Entry<Ownable, Integer> e : tally.entrySet()) {
