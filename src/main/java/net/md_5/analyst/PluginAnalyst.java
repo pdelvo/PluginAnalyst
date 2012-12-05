@@ -18,8 +18,10 @@ import java.net.URLConnection;
 import java.nio.channels.Channels;
 import java.nio.channels.ReadableByteChannel;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.zip.ZipEntry;
@@ -29,6 +31,8 @@ import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.MethodNode;
 
 public class PluginAnalyst {
 
@@ -62,6 +66,7 @@ public class PluginAnalyst {
     }
 
     private static void visitDirectory(File dir) throws IOException {
+        String filter = "org/bukkit/(?!craftbukkit).*";
         Map<Ownable, Integer> tally = new HashMap<>();
 
         for (File file : dir.listFiles()) {
@@ -71,22 +76,72 @@ public class PluginAnalyst {
                 ReferenceData.add(tally, o);
             }
         }
+
+        // Precheck all classes and climb the tree
+        Iterator<Map.Entry<Ownable, Integer>> iter = tally.entrySet().iterator();
+        tally = new HashMap<>();
+        while (iter.hasNext()) {
+            Map.Entry<Ownable, Integer> o = iter.next();
+            if (!o.getKey().owner.matches(filter)) {
+                continue;
+            }
+            Ownable declarer = findDeclarer(o.getKey());
+
+            if (declarer != null) {
+                System.out.println("Remapping: " + o.getKey() + " to " + declarer);
+            }
+            ReferenceData.add(tally, declarer == null ? o.getKey() : declarer, o.getValue());
+        }
+
+
         tally = MapSorter.valueSortedMap(tally);
 
         try (PrintWriter fr = new PrintWriter("methods.log")) {
             for (Map.Entry<Ownable, Integer> e : tally.entrySet()) {
-                if (e.getKey().toString().matches("org/bukkit/(?!craftbukkit).*")) {
+                if (e.getKey().toString().matches(filter)) {
                     fr.println(e.getValue() + " " + e.getKey());
                 }
             }
         }
     }
 
+    private static Ownable findDeclarer(Ownable o) {
+        Ownable mapped;
+        try {
+            ClassReader cr = new ClassReader(o.owner); // Read the class holding this ownable
+            ClassNode node = new ClassNode();
+            cr.accept(node, ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+
+            if (node.methods != null) {
+                for (MethodNode m : (List<MethodNode>) node.methods) {
+                    if (m.name.equals(o.name) && m.desc.equals(o.descriptor)) {
+                        return new Ownable(node.name, m.name, m.desc);
+                    }
+                }
+            }
+
+            if (node.interfaces != null) {
+                for (String iface : (List<String>) node.interfaces) {
+                    mapped = findDeclarer(new Ownable(iface, o.name, o.descriptor));
+                    if (mapped != null) {
+                        return mapped;
+                    }
+                }
+            }
+            if (node.superName != null) {
+                return findDeclarer(new Ownable(node.superName, o.name, o.descriptor));
+            }
+        } catch (IOException ex) {
+        }
+        return null;
+    }
+
     private static JarInspector visitFile(File file) throws IOException {
         JarInspector inspector = new JarInspector();
 
         try (FileInputStream in = new FileInputStream(file)) {
-            for (Map.Entry<String, byte[]> clazz : getAllEntries(in).entrySet()) {
+            Map<String, byte[]> entries = getAllEntries(in);
+            for (Map.Entry<String, byte[]> clazz : entries.entrySet()) {
                 try {
                     ClassReader cr = new ClassReader(clazz.getValue());
                     cr.accept(inspector, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
@@ -94,6 +149,8 @@ public class PluginAnalyst {
                     System.err.println("Warning: " + clazz.getKey() + " may be corrupted!");
                 }
             }
+            // ease some gc pressure
+            entries.clear();
         }
 
         // try (FileWriter statWriter = new FileWriter(new File(outDir, file.getName()))) {

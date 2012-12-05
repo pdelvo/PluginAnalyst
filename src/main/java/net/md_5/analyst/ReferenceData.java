@@ -9,11 +9,15 @@ public class ReferenceData {
     public Map<Ownable, Integer> methods = new HashMap<>();
 
     public static <T> void add(Map<T, Integer> m, T entry) {
+        add(m, entry, 1);
+    }
+
+    public static <T> void add(Map<T, Integer> m, T entry, int amount) {
         Integer val = m.get(entry);
         if (val == null) {
             val = 0;
         }
-        val++;
+        val += amount;
         m.put(entry, val);
     }
 }
